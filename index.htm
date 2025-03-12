@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="de">
+
+<head>
+	<meta charset="utf-8">
+	<title>Seismic & Audio Recorder</title>
+	<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+	<script src="https://cdn.jsdelivr.net/npm/lamejs@1.2.0/lame.min.js"></script>
+	<style>
+		body {
+			background-color: #121212;
+			color: #f5f5f5;
+		}
+
+		canvas {
+			border: 1px solid #444;
+			margin: 10px 0;
+		}
+
+		.settings-card {
+			font-size: 0.9rem;
+			padding: 0.5rem;
+		}
+	</style>
+</head>
+
+<body class="bg-dark text-light">
+	<div class="container py-2">
+		<h1 class="mb-3">Seismic & Audio Recorder</h1>
+		<div class="mb-2">
+			<button id="startStopBtn" class="btn btn-primary me-2">Start</button>
+			<button id="downloadLogBtn" class="btn btn-secondary me-2">Log herunterladen</button>
+			<button id="clearLogBtn" class="btn btn-danger">Log löschen</button>
+		</div>
+		<div class="card bg-secondary text-light mb-3 settings-card">
+			<div class="card-body p-2">
+				<h6 class="card-title">Einstellungen</h6>
+				<div class="mb-2">
+					<label for="audioThreshold" class="form-label">Audio Threshold: <span
+							id="audioThresholdVal"></span></label>
+					<input type="range" class="form-range" id="audioThreshold" min="0.005" max="0.05" step="0.005"
+						value="0.01">
+				</div>
+				<div>
+					<label for="seismicThreshold" class="form-label">Seismic Threshold: <span
+							id="seismicThresholdVal"></span></label>
+					<input type="range" class="form-range" id="seismicThreshold" min="0.5" max="10" step="0.1"
+						value="3">
+				</div>
+			</div>
+		</div>
+		<canvas id="visualizer" class="w-100" height="150"></canvas>
+		<h5>Log</h5>
+		<ul id="log" class="list-group mb-3"></ul>
+		<h5>Audio Clips</h5>
+		<div id="audioClips" class="mb-3"></div>
+	</div>
+
+	<script>
+		let audioContext, analyser, microphone, scriptNode, stream;
+		let isRecording = false;
+		let audioThreshold = 0.01;
+		let seismicThreshold = 3;
+		let logEntries = [];
+		let preAudioBuffer = [];
+		let rafId = null;
+
+		// Variablen für ein Event
+		let recordingEvent = false;
+		let eventCaptureStartTime = 0;
+		let eventPreBuffer = [];
+		let eventPostBuffer = [];
+		let lastEventTime = 0;
+		let isFinalizing = false;
+		let finalizationScheduled = false; // Neuer Flag
+
+		const startStopBtn = document.getElementById('startStopBtn');
+		const downloadLogBtn = document.getElementById('downloadLogBtn');
+		const clearLogBtn = document.getElementById('clearLogBtn');
+		const logList = document.getElementById('log');
+		const audioClipsDiv = document.getElementById('audioClips');
+		const canvas = document.getElementById('visualizer');
+		const canvasCtx = canvas.getContext('2d');
+
+		const audioThresholdSlider = document.getElementById('audioThreshold');
+		const seismicThresholdSlider = document.getElementById('seismicThreshold');
+		const audioThresholdVal = document.getElementById('audioThresholdVal');
+		const seismicThresholdVal = document.getElementById('seismicThresholdVal');
+
+		function loadSettings() {
+			try {
+				const settings = JSON.parse(localStorage.getItem('settings')) || {};
+				audioThreshold = settings.audioThreshold || 0.01;
+				seismicThreshold = settings.seismicThreshold || 3;
+				audioThresholdSlider.value = audioThreshold;
+				seismicThresholdSlider.value = seismicThreshold;
+				updateThresholdDisplays();
+			} catch (e) {
+				console.error('Fehler beim Laden der Einstellungen:', e);
+			}
+		}
+
+		function saveSettings() {
+			try {
+				const settings = {
+					audioThreshold: parseFloat(audioThresholdSlider.value),
+					seismicThreshold: parseFloat(seismicThresholdSlider.value)
+				};
+				localStorage.setItem('settings', JSON.stringify(settings));
+				audioThreshold = settings.audioThreshold;
+				seismicThreshold = settings.seismicThreshold;
+				updateThresholdDisplays();
+			} catch (e) {
+				console.error('Fehler beim Speichern der Einstellungen:', e);
+			}
+		}
+
+		function updateThresholdDisplays() {
+			audioThresholdVal.textContent = audioThreshold.toFixed(3);
+			seismicThresholdVal.textContent = seismicThreshold.toFixed(1);
+		}
+
+		audioThresholdSlider.addEventListener('input', saveSettings);
+		seismicThresholdSlider.addEventListener('input', saveSettings);
+
+		function loadLogs() {
+			try {
+				const storedLogs = JSON.parse(localStorage.getItem('logEntries')) || [];
+				logEntries = storedLogs;
+				logList.innerHTML = "";
+				storedLogs.forEach(entry => {
+					const li = document.createElement('li');
+					li.className = "list-group-item bg-dark text-light";
+					li.textContent = entry;
+					logList.appendChild(li);
+				});
+			} catch (e) {
+				console.error('Fehler beim Laden der Logs:', e);
+			}
+		}
+
+		function loadAudioClips() {
+			audioClipsDiv.innerHTML = "";
+			for (let i = 0; i < localStorage.length; i++) {
+				const key = localStorage.key(i);
+				if (key?.startsWith("audio_")) {
+					const dataURL = localStorage.getItem(key);
+					const link = document.createElement('a');
+					link.href = dataURL;
+					link.download = `${key}.mp3`;
+					link.textContent = `Audioclip ${key}`;
+					link.className = "d-block mb-1";
+					audioClipsDiv.appendChild(link);
+				}
+			}
+		}
+
+		loadSettings();
+		loadLogs();
+		loadAudioClips();
+
+		startStopBtn.addEventListener('click', async () => {
+			if (!isRecording) {
+				try {
+					audioContext = new (window.AudioContext || window.webkitAudioContext)();
+					await audioContext.resume();
+					stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+					microphone = audioContext.createMediaStreamSource(stream);
+					analyser = audioContext.createAnalyser();
+					analyser.fftSize = 2048;
+					microphone.connect(analyser);
+					scriptNode = audioContext.createScriptProcessor(2048, 1, 1);
+					scriptNode.onaudioprocess = onAudioProcess;
+					microphone.connect(scriptNode);
+					const gainNode = audioContext.createGain();
+					gainNode.gain.value = 0;
+					scriptNode.connect(gainNode);
+					gainNode.connect(audioContext.destination);
+
+					if (window.DeviceMotionEvent && typeof DeviceMotionEvent.requestPermission === 'function') {
+						await DeviceMotionEvent.requestPermission();
+					}
+					window.addEventListener('devicemotion', handleMotion, false);
+					isRecording = true;
+					startStopBtn.textContent = "Stop";
+					visualize();
+				} catch (err) {
+					console.error('Fehler beim Starten:', err);
+					alert('Fehler beim Zugriff auf Mikrofon oder Sensoren: ' + err.message);
+				}
+			} else {
+				stopRecording();
+			}
+		});
+
+		function stopRecording() {
+			isRecording = false;
+			startStopBtn.textContent = "Start";
+			if (stream) stream.getTracks().forEach(track => track.stop());
+			if (scriptNode) scriptNode.disconnect();
+			if (microphone) microphone.disconnect();
+			if (audioContext) audioContext.close();
+			window.removeEventListener('devicemotion', handleMotion);
+			if (rafId) cancelAnimationFrame(rafId);
+			rafId = null;
+		}
+
+		function onAudioProcess(event) {
+			if (!isRecording) return;
+			const now = Date.now();
+			const inputData = event.inputBuffer.getChannelData(0);
+			const bufferCopy = new Float32Array(inputData);
+			preAudioBuffer.push({ timestamp: now, data: bufferCopy });
+			while (preAudioBuffer.length && preAudioBuffer[0].timestamp < now - 15000) {
+				preAudioBuffer.shift();
+			}
+			let sum = 0;
+			for (let i = 0; i < bufferCopy.length; i++) {
+				sum += Math.abs(bufferCopy[i]);
+			}
+			const avg = sum / bufferCopy.length;
+
+			if (avg > audioThreshold && !recordingEvent && (now - lastEventTime > 3000)) {
+				triggerEvent("Audio");
+			}
+
+			if (recordingEvent && !isFinalizing) {
+				if (now < eventCaptureStartTime + 5000) {
+					eventPostBuffer.push(bufferCopy);
+				} else if (!finalizationScheduled) {
+					finalizationScheduled = true;
+					setTimeout(finalizeEventCapture, 0);
+				}
+			}
+		}
+
+		function handleMotion(event) {
+			const now = Date.now();
+			let ax = 0, ay = 0, az = 0;
+			if (event.acceleration && event.acceleration.x !== null) {
+				ax = event.acceleration.x || 0;
+				ay = event.acceleration.y || 0;
+				az = event.acceleration.z || 0;
+			} else if (event.accelerationIncludingGravity) {
+				ax = event.accelerationIncludingGravity.x || 0;
+				ay = event.accelerationIncludingGravity.y || 0;
+				az = (event.accelerationIncludingGravity.z || 0) - 9.81;
+			}
+			const magnitude = Math.sqrt(ax * ax + ay * ay + az * az);
+			if (magnitude > seismicThreshold && !recordingEvent && (now - lastEventTime > 3000)) {
+				triggerEvent("Seismic");
+			}
+		}
+
+		function triggerEvent(type) {
+			if (isFinalizing || finalizationScheduled) return;
+			recordingEvent = true;
+			eventCaptureStartTime = Date.now();
+			const triggerTime = eventCaptureStartTime;
+			eventPreBuffer = preAudioBuffer
+				.filter(chunk => chunk.timestamp >= (triggerTime - 5000))
+				.map(chunk => chunk.data);
+			eventPostBuffer = [];
+			beep();
+			logPeak(type);
+		}
+
+		function finalizeEventCapture() {
+			if (isFinalizing) return;
+			isFinalizing = true;
+			recordingEvent = false;
+			lastEventTime = Date.now();
+			finalizationScheduled = false;
+			const combined = flattenBuffers(eventPreBuffer.concat(eventPostBuffer));
+			const mp3Blob = createMP3Blob(combined, audioContext.sampleRate);
+			const url = URL.createObjectURL(mp3Blob);
+			const key = `audio_${Date.now()}`;
+			const link = document.createElement('a');
+			link.href = url;
+			link.download = `${key}.mp3`;
+			link.textContent = `Audioclip ${key}`;
+			link.className = "d-block mb-1";
+			audioClipsDiv.appendChild(link);
+			const reader = new FileReader();
+			reader.onloadend = () => {
+				try {
+					localStorage.setItem(key, reader.result);
+					loadAudioClips();
+				} catch (e) {
+					console.error('Speicherfehler:', e);
+					alert('Fehler beim Speichern des Audioclips: ' + e.message);
+				}
+				isFinalizing = false;
+			};
+			reader.readAsDataURL(mp3Blob);
+			eventPreBuffer = [];
+			eventPostBuffer = [];
+		}
+
+		function flattenBuffers(bufferArray) {
+			const length = bufferArray.reduce((sum, buf) => sum + buf.length, 0);
+			const result = new Float32Array(length);
+			let offset = 0;
+			bufferArray.forEach(buf => {
+				result.set(buf, offset);
+				offset += buf.length;
+			});
+			return result;
+		}
+
+		function float32ToInt16(buffer) {
+			const l = buffer.length;
+			const result = new Int16Array(l);
+			for (let i = 0; i < l; i++) {
+				const s = Math.max(-1, Math.min(1, buffer[i]));
+				result[i] = s < 0 ? s * 32768 : s * 32767;
+			}
+			return result;
+		}
+
+		function createMP3Blob(samples, sampleRate) {
+			const int16Samples = float32ToInt16(samples);
+			const mp3encoder = new lamejs.Mp3Encoder(1, sampleRate, 64);
+			const blockSize = 1152;
+			const mp3Data = [];
+			for (let i = 0; i < int16Samples.length; i += blockSize) {
+				const sampleChunk = int16Samples.subarray(i, i + blockSize);
+				const chunkCopy = new Int16Array(blockSize);
+				chunkCopy.set(sampleChunk);
+				const mp3buf = mp3encoder.encodeBuffer(chunkCopy);
+				if (mp3buf.length > 0) {
+					mp3Data.push(new Uint8Array(mp3buf));
+				}
+			}
+			const mp3buf = mp3encoder.flush();
+			if (mp3buf.length > 0) {
+				mp3Data.push(new Uint8Array(mp3buf));
+			}
+			return new Blob(mp3Data, { type: 'audio/mp3' });
+		}
+
+		function beep() {
+			const osc = audioContext.createOscillator();
+			const gain = audioContext.createGain();
+			osc.frequency.value = 440;
+			gain.gain.value = 0.5;
+			osc.connect(gain);
+			gain.connect(audioContext.destination);
+			osc.start();
+			osc.stop(audioContext.currentTime + 0.2);
+			osc.onended = () => { gain.disconnect(); osc.disconnect(); };
+		}
+
+		function logPeak(type) {
+			const entry = `${type} Peak um ${new Date().toLocaleTimeString()}`;
+			logEntries.push(entry);
+			const li = document.createElement('li');
+			li.className = "list-group-item bg-dark text-light";
+			li.textContent = entry;
+			logList.appendChild(li);
+			try {
+				localStorage.setItem('logEntries', JSON.stringify(logEntries));
+			} catch (e) {
+				console.error('Fehler beim Speichern des Logs:', e);
+			}
+		}
+
+		function visualize() {
+			if (!isRecording) return;
+			rafId = requestAnimationFrame(visualize);
+			if (!analyser) return;
+			const freqData = new Uint8Array(analyser.frequencyBinCount);
+			analyser.getByteFrequencyData(freqData);
+			canvasCtx.fillStyle = '#121212';
+			canvasCtx.fillRect(0, 0, canvas.width, canvas.height);
+			const barWidth = canvas.width / freqData.length;
+			let x = 0;
+			for (let i = 0; i < freqData.length; i++) {
+				const barHeight = freqData[i] / 2;
+				canvasCtx.fillStyle = '#f5f5f5';
+				canvasCtx.fillRect(x, canvas.height - barHeight, barWidth, barHeight);
+				x += barWidth + 1;
+			}
+		}
+
+		downloadLogBtn.addEventListener('click', () => {
+			const blob = new Blob([logEntries.join('\n')], { type: 'text/plain' });
+			const url = URL.createObjectURL(blob);
+			const a = document.createElement('a');
+			a.href = url;
+			a.download = 'log.txt';
+			a.click();
+			URL.revokeObjectURL(url);
+		});
+
+		clearLogBtn.addEventListener('click', () => {
+			logEntries = [];
+			localStorage.removeItem('logEntries');
+			logList.innerHTML = "";
+			const keysToRemove = [];
+			for (let i = 0; i < localStorage.length; i++) {
+				const key = localStorage.key(i);
+				if (key?.startsWith("audio_")) keysToRemove.push(key);
+			}
+			keysToRemove.forEach(key => localStorage.removeItem(key));
+			loadAudioClips();
+		});
+
+		window.addEventListener('resize', () => { canvas.width = canvas.parentElement.clientWidth; });
+		canvas.width = canvas.parentElement.clientWidth;
+	</script>
+</body>
+
+</html>
