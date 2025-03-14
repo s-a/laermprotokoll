@@ -44,49 +44,50 @@
 		<h1 class="mb-3 text-center">Seismic & Audio Recorder</h1>
 		<div class="d-flex gap-2 justify-content-center">
 			<button id="startStopBtn" class="btn btn-primary">Start</button>
-			<button id="settingsBtn" class="btn btn-secondary">Settings</button>
 			<button id="downloadLogBtn" class="btn btn-secondary">Download Log</button>
 			<button id="clearLogBtn" class="btn btn-danger">Clear Log</button>
 		</div>
 
-		<canvas id="visualizer"></canvas>
+		<h5 class="mt-3">Audio Frequency Visualizer</h5>
+		<div>
+			<button class="btn btn-sm btn-secondary" onclick="toggleCanvas('visualizer', this)">Minimize</button>
+			<canvas id="visualizer"></canvas>
+			<label for="audioThreshold" class="form-label">Audio Threshold: <span id="audioThresholdVal"></span></label>
+			<input type="range" class="form-range" id="audioThreshold" min="0.0001" max="0.1" step="0.0001"
+				value="0.001">
+		</div>
+
+		<h5>Audio Max Values Over Time</h5>
+		<div>
+			<button class="btn btn-sm btn-secondary" onclick="toggleCanvas('audioMaxCanvas', this)">Minimize</button>
+			<canvas id="audioMaxCanvas"></canvas>
+		</div>
+
+		<h5>Seismic Max Values Over Time</h5>
+		<div>
+			<button class="btn btn-sm btn-secondary" onclick="toggleCanvas('seismicMaxCanvas', this)">Minimize</button>
+			<canvas id="seismicMaxCanvas"></canvas>
+		</div>
+
+		<div class="mt-3">
+
+			<label for="seismicThreshold" class="form-label">Seismic Threshold: <span
+					id="seismicThresholdVal"></span></label>
+			<input type="range" class="form-range" id="seismicThreshold" min="0.5" max="10" step="0.1" value="3">
+			<div class="form-check mt-2">
+				<input class="form-check-input" type="checkbox" id="enableBeep">
+				<label class="form-check-label" for="enableBeep">Enable Beep</label>
+			</div>
+			<div class="form-check mt-2">
+				<input class="form-check-input" type="checkbox" id="enableAudioLog" checked>
+				<label class="form-check-label" for="enableAudioLog">Enable Audio Log</label>
+			</div>
+		</div>
+
 		<h5>Log</h5>
 		<ul id="log" class="list-group mb-3"></ul>
 		<h5>Audio Clips</h5>
 		<div id="audioClips"></div>
-	</div>
-
-	<!-- Settings Modal -->
-	<div id="settingsModal" class="modal fade" tabindex="-1">
-		<div class="modal-dialog">
-			<div class="modal-content bg-dark text-light">
-				<div class="modal-header">
-					<h5 class="modal-title">Settings</h5>
-					<button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-				</div>
-				<div class="modal-body">
-					<label for="audioThreshold" class="form-label">Audio Threshold: <span
-							id="audioThresholdVal"></span></label>
-					<input type="range" class="form-range" id="audioThreshold" min="0.0001" max="0.1" step="0.0001"
-						value="0.001">
-					<label for="seismicThreshold" class="form-label">Seismic Threshold: <span
-							id="seismicThresholdVal"></span></label>
-					<input type="range" class="form-range" id="seismicThreshold" min="0.5" max="10" step="0.1"
-						value="3">
-					<div class="form-check mt-2">
-						<input class="form-check-input" type="checkbox" id="enableBeep">
-						<label class="form-check-label" for="enableBeep">Enable Beep</label>
-					</div>
-					<div class="form-check mt-2">
-						<input class="form-check-input" type="checkbox" id="enableAudioLog" checked>
-						<label class="form-check-label" for="enableAudioLog">Enable Audio Log</label>
-					</div>
-				</div>
-				<div class="modal-footer">
-					<button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-				</div>
-			</div>
-		</div>
 	</div>
 
 	<script>
@@ -95,10 +96,80 @@
 		let audioThreshold = 0.001, seismicThreshold = 3, enableBeep = false, enableAudioLog = true;
 		let recordingEvent = false, eventCaptureStartTime = 0, eventPreBuffer = [], eventPostBuffer = [], lastEventTime = 0;
 		let rafId = null, lastAudioLogTime = 0;
+		let audioMaxHistory = [], seismicMaxHistory = [], latestAudioMax = 0, latestSeismicMax = 0;
 
 		const canvas = document.getElementById('visualizer'), canvasCtx = canvas.getContext('2d');
+		const audioMaxCanvas = document.getElementById('audioMaxCanvas'), audioMaxCtx = audioMaxCanvas.getContext('2d');
+		const seismicMaxCanvas = document.getElementById('seismicMaxCanvas'), seismicMaxCtx = seismicMaxCanvas.getContext('2d');
 		const logList = document.getElementById('log'), audioClipsDiv = document.getElementById('audioClips');
-		const settingsModal = new bootstrap.Modal(document.getElementById('settingsModal'));
+
+		canvas.width = canvas.parentElement.clientWidth;
+		audioMaxCanvas.width = canvas.parentElement.clientWidth;
+		seismicMaxCanvas.width = canvas.parentElement.clientWidth;
+
+		setInterval(() => {
+			if (isRecording) {
+				const now = Date.now();
+				audioMaxHistory.push({ timestamp: now, value: latestAudioMax });
+				seismicMaxHistory.push({ timestamp: now, value: latestSeismicMax });
+				const cutoff = now - 60000;
+				audioMaxHistory = audioMaxHistory.filter(item => item.timestamp > cutoff);
+				seismicMaxHistory = seismicMaxHistory.filter(item => item.timestamp > cutoff);
+				latestAudioMax = 0;
+				latestSeismicMax = 0;
+				drawAudioMaxHistory();
+				drawSeismicMaxHistory();
+			}
+		}, 1000);
+
+		function toggleCanvas(canvasId, button) {
+			const canvas = document.getElementById(canvasId);
+			if (canvas.style.display === 'none') {
+				canvas.style.display = 'block';
+				button.textContent = 'Minimize';
+			} else {
+				canvas.style.display = 'none';
+				button.textContent = 'Maximize';
+			}
+		}
+
+		function drawAudioMaxHistory() {
+			audioMaxCtx.fillStyle = '#121212';
+			audioMaxCtx.fillRect(0, 0, audioMaxCanvas.width, audioMaxCanvas.height);
+			if (audioMaxHistory.length < 2) return;
+			const minTime = audioMaxHistory[0].timestamp;
+			const maxTime = audioMaxHistory[audioMaxHistory.length - 1].timestamp;
+			const timeRange = maxTime - minTime;
+			const maxValue = 1; // Max peak amplitude
+			audioMaxCtx.beginPath();
+			audioMaxHistory.forEach((item, index) => {
+				const x = (item.timestamp - minTime) / timeRange * audioMaxCanvas.width;
+				const y = audioMaxCanvas.height - (item.value / maxValue * audioMaxCanvas.height);
+				if (index === 0) audioMaxCtx.moveTo(x, y);
+				else audioMaxCtx.lineTo(x, y);
+			});
+			audioMaxCtx.strokeStyle = 'blue';
+			audioMaxCtx.stroke();
+		}
+
+		function drawSeismicMaxHistory() {
+			seismicMaxCtx.fillStyle = '#121212';
+			seismicMaxCtx.fillRect(0, 0, seismicMaxCanvas.width, seismicMaxCanvas.height);
+			if (seismicMaxHistory.length < 2) return;
+			const minTime = seismicMaxHistory[0].timestamp;
+			const maxTime = seismicMaxHistory[seismicMaxHistory.length - 1].timestamp;
+			const timeRange = maxTime - minTime;
+			const maxValue = 20; // Max seismic magnitude (adjust as needed)
+			seismicMaxCtx.beginPath();
+			seismicMaxHistory.forEach((item, index) => {
+				const x = (item.timestamp - minTime) / timeRange * seismicMaxCanvas.width;
+				const y = seismicMaxCanvas.height - (item.value / maxValue * seismicMaxCanvas.height);
+				if (index === 0) seismicMaxCtx.moveTo(x, y);
+				else seismicMaxCtx.lineTo(x, y);
+			});
+			seismicMaxCtx.strokeStyle = 'red';
+			seismicMaxCtx.stroke();
+		}
 
 		function loadSettings() {
 			const settings = JSON.parse(localStorage.getItem('settings')) || {};
@@ -129,7 +200,8 @@
 		}
 
 		function updateThresholdDisplays() {
-			document.getElementById('audioThresholdVal').textContent = audioThreshold.toFixed(4);
+			const audioDb = 20 * Math.log10(audioThreshold);
+			document.getElementById('audioThresholdVal').textContent = `${audioThreshold.toFixed(4)} (${audioDb.toFixed(1)} dB)`;
 			document.getElementById('seismicThresholdVal').textContent = seismicThreshold.toFixed(1);
 		}
 
@@ -138,12 +210,12 @@
 			const entry = amplitude ?
 				`[${new Date().toLocaleString()}] ${type} Event (Amplitude: ${amplitude.toFixed(4)})` :
 				`[${new Date().toLocaleString()}] ${type} Event`;
-			logEntries.unshift(entry); // Prepend to log entries
-			if (logEntries.length > 1000) logEntries.pop(); // Limit to 1000 entries
+			logEntries.unshift(entry);
+			if (logEntries.length > 1000) logEntries.pop();
 			const li = document.createElement('li');
 			li.className = "list-group-item bg-dark text-light";
 			li.textContent = entry;
-			logList.insertBefore(li, logList.firstChild); // Prepend to list
+			logList.insertBefore(li, logList.firstChild);
 			try {
 				localStorage.setItem('logEntries', JSON.stringify(logEntries));
 			} catch (e) {
@@ -159,7 +231,7 @@
 				const li = document.createElement('li');
 				li.className = "list-group-item bg-dark text-light";
 				li.textContent = entry;
-				logList.appendChild(li); // Append to maintain order initially
+				logList.appendChild(li);
 			});
 		}
 
@@ -238,7 +310,7 @@
 				canvasCtx.lineTo(canvas.width, thresholdY);
 				canvasCtx.stroke();
 				canvasCtx.fillStyle = '#ff5722';
-				const thresholdDb = 20 * Math.log10(audioThreshold / 0.0001); // Reference to min value
+				const thresholdDb = 20 * Math.log10(audioThreshold / 0.0001);
 				canvasCtx.fillText(`Threshold: ${thresholdDb.toFixed(1)} dB`, scaleWidth + 5, thresholdY - 5);
 			}
 		}
@@ -298,11 +370,11 @@
 			}
 			let sum = 0;
 			for (let i = 0; i < bufferCopy.length; i++) {
-				sum += bufferCopy[i] * bufferCopy[i]; // Square of the sample
+				sum += bufferCopy[i] * bufferCopy[i];
 			}
-			const rms = Math.sqrt(sum / bufferCopy.length); // RMS amplitude
-
-			console.log('Audio RMS Amplitude:', rms);
+			const rms = Math.sqrt(sum / bufferCopy.length);
+			const peak = Math.max(...Array.from(bufferCopy).map(Math.abs));
+			if (peak > latestAudioMax) latestAudioMax = peak;
 
 			if (rms > audioThreshold && (now - lastAudioLogTime > 1000)) {
 				logEvent("Audio", rms);
@@ -335,6 +407,7 @@
 				az = (event.accelerationIncludingGravity.z || 0) - 9.81;
 			}
 			const magnitude = Math.sqrt(ax * ax + ay * ay + az * az);
+			if (magnitude > latestSeismicMax) latestSeismicMax = magnitude;
 			if (magnitude > seismicThreshold && !recordingEvent && (now - lastEventTime > 3000)) {
 				triggerEvent("Seismic");
 			}
@@ -444,7 +517,6 @@
 		}
 
 		document.getElementById('startStopBtn').addEventListener('click', startStopRecording);
-		document.getElementById('settingsBtn').addEventListener('click', () => settingsModal.show());
 		document.getElementById('downloadLogBtn').addEventListener('click', downloadLog);
 		document.getElementById('clearLogBtn').addEventListener('click', clearLog);
 		document.getElementById('audioThreshold').addEventListener('input', saveSettings);
@@ -452,8 +524,11 @@
 		document.getElementById('enableBeep').addEventListener('change', saveSettings);
 		document.getElementById('enableAudioLog').addEventListener('change', saveSettings);
 
-		window.addEventListener('resize', () => { canvas.width = canvas.parentElement.clientWidth; });
-		canvas.width = canvas.parentElement.clientWidth;
+		window.addEventListener('resize', () => {
+			canvas.width = canvas.parentElement.clientWidth;
+			audioMaxCanvas.width = canvas.parentElement.clientWidth;
+			seismicMaxCanvas.width = canvas.parentElement.clientWidth;
+		});
 
 		loadSettings();
 		loadLogs();
