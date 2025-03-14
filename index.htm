@@ -13,80 +13,105 @@
 		body {
 			background-color: #121212;
 			color: #f5f5f5;
+			font-family: 'Arial', sans-serif;
 		}
 
 		canvas {
-			border: 1px solid #444;
+			border: 2px solid #555;
+			border-radius: 5px;
 			width: 100%;
-			height: 150px;
+			background-color: #1e1e1e;
+			box-shadow: 0 4px 8px rgba(0, 0, 0, 0.5);
 		}
 
 		#log {
 			max-height: 300px;
 			overflow-y: auto;
-			border: 1px solid #444;
+			border: 2px solid #555;
+			border-radius: 5px;
 			padding: 0;
+			background-color: #1e1e1e;
+			box-shadow: 0 4px 8px rgba(0, 0, 0, 0.5);
 		}
 
 		#log li {
 			padding: 5px 10px;
 			border-bottom: 1px solid #333;
+			transition: background-color 0.3s;
+		}
+
+		#log li:hover {
+			background-color: #2c2c2c;
 		}
 
 		#log li:nth-child(odd) {
-			background-color: #1e1e1e;
+			background-color: #252525;
+		}
+
+		.btn-custom {
+			background-color: #4caf50;
+			border: none;
+			transition: transform 0.2s, background-color 0.2s;
+		}
+
+		.btn-custom:hover {
+			transform: scale(1.05);
+			background-color: #45a049;
+		}
+
+		.form-range {
+			accent-color: #ff5722;
+		}
+
+		.form-check-input:checked {
+			background-color: #ff5722;
+			border-color: #ff5722;
 		}
 	</style>
 </head>
 
 <body class="bg-dark text-light">
 	<div class="container py-2">
-		<h1 class="mb-3 text-center">Seismic & Audio Recorder</h1>
+		<h1 class="mb-3 text-center text-info" style="text-shadow: 2px 2px 4px #000;">Seismic & Audio Recorder</h1>
 		<div class="d-flex gap-2 justify-content-center">
-			<button id="startStopBtn" class="btn btn-primary">Start</button>
+			<button id="startStopBtn" class="btn btn-custom">Start</button>
 			<button id="downloadLogBtn" class="btn btn-secondary">Download Log</button>
 			<button id="clearLogBtn" class="btn btn-danger">Clear Log</button>
 		</div>
 
-		<h5 class="mt-3">Audio Frequency Visualizer</h5>
+		<h5 class="mt-3 text-warning">Audio Frequency Visualizer</h5>
 		<div>
 			<button class="btn btn-sm btn-secondary" onclick="toggleCanvas('visualizer', this)">Minimize</button>
 			<canvas id="visualizer"></canvas>
-			<label for="audioThreshold" class="form-label">Audio Threshold: <span id="audioThresholdVal"></span></label>
+			<label for="audioThreshold" class="form-label text-primary">Audio Threshold: <span
+					id="audioThresholdVal"></span></label>
 			<input type="range" class="form-range" id="audioThreshold" min="0.0001" max="0.1" step="0.0001"
 				value="0.001">
 		</div>
 
-		<h5>Audio Max Values Over Time</h5>
+		<h5 class="mt-3 text-warning">Max Values Over Time</h5>
 		<div>
-			<button class="btn btn-sm btn-secondary" onclick="toggleCanvas('audioMaxCanvas', this)">Minimize</button>
-			<canvas id="audioMaxCanvas"></canvas>
-		</div>
-
-		<h5>Seismic Max Values Over Time</h5>
-		<div>
-			<button class="btn btn-sm btn-secondary" onclick="toggleCanvas('seismicMaxCanvas', this)">Minimize</button>
-			<canvas id="seismicMaxCanvas"></canvas>
+			<button class="btn btn-sm btn-secondary" onclick="toggleCanvas('maxValuesCanvas', this)">Minimize</button>
+			<canvas id="maxValuesCanvas" height="100"></canvas>
 		</div>
 
 		<div class="mt-3">
-
-			<label for="seismicThreshold" class="form-label">Seismic Threshold: <span
+			<label for="seismicThreshold" class="form-label text-primary">Seismic Threshold: <span
 					id="seismicThresholdVal"></span></label>
 			<input type="range" class="form-range" id="seismicThreshold" min="0.5" max="10" step="0.1" value="3">
 			<div class="form-check mt-2">
 				<input class="form-check-input" type="checkbox" id="enableBeep">
-				<label class="form-check-label" for="enableBeep">Enable Beep</label>
+				<label class="form-check-label text-light" for="enableBeep">Enable Beep</label>
 			</div>
 			<div class="form-check mt-2">
 				<input class="form-check-input" type="checkbox" id="enableAudioLog" checked>
-				<label class="form-check-label" for="enableAudioLog">Enable Audio Log</label>
+				<label class="form-check-label text-light" for="enableAudioLog">Enable Audio Log</label>
 			</div>
 		</div>
 
-		<h5>Log</h5>
+		<h5 class="mt-3 text-warning">Log</h5>
 		<ul id="log" class="list-group mb-3"></ul>
-		<h5>Audio Clips</h5>
+		<h5 class="text-warning">Audio Clips</h5>
 		<div id="audioClips"></div>
 	</div>
 
@@ -99,13 +124,11 @@
 		let audioMaxHistory = [], seismicMaxHistory = [], latestAudioMax = 0, latestSeismicMax = 0;
 
 		const canvas = document.getElementById('visualizer'), canvasCtx = canvas.getContext('2d');
-		const audioMaxCanvas = document.getElementById('audioMaxCanvas'), audioMaxCtx = audioMaxCanvas.getContext('2d');
-		const seismicMaxCanvas = document.getElementById('seismicMaxCanvas'), seismicMaxCtx = seismicMaxCanvas.getContext('2d');
+		const maxValuesCanvas = document.getElementById('maxValuesCanvas'), maxValuesCtx = maxValuesCanvas.getContext('2d');
 		const logList = document.getElementById('log'), audioClipsDiv = document.getElementById('audioClips');
 
 		canvas.width = canvas.parentElement.clientWidth;
-		audioMaxCanvas.width = canvas.parentElement.clientWidth;
-		seismicMaxCanvas.width = canvas.parentElement.clientWidth;
+		maxValuesCanvas.width = maxValuesCanvas.parentElement.clientWidth;
 
 		setInterval(() => {
 			if (isRecording) {
@@ -117,8 +140,7 @@
 				seismicMaxHistory = seismicMaxHistory.filter(item => item.timestamp > cutoff);
 				latestAudioMax = 0;
 				latestSeismicMax = 0;
-				drawAudioMaxHistory();
-				drawSeismicMaxHistory();
+				drawMaxValuesHistory();
 			}
 		}, 1000);
 
@@ -133,42 +155,59 @@
 			}
 		}
 
-		function drawAudioMaxHistory() {
-			audioMaxCtx.fillStyle = '#121212';
-			audioMaxCtx.fillRect(0, 0, audioMaxCanvas.width, audioMaxCanvas.height);
-			if (audioMaxHistory.length < 2) return;
-			const minTime = audioMaxHistory[0].timestamp;
-			const maxTime = audioMaxHistory[audioMaxHistory.length - 1].timestamp;
-			const timeRange = maxTime - minTime;
-			const maxValue = 1; // Max peak amplitude
-			audioMaxCtx.beginPath();
-			audioMaxHistory.forEach((item, index) => {
-				const x = (item.timestamp - minTime) / timeRange * audioMaxCanvas.width;
-				const y = audioMaxCanvas.height - (item.value / maxValue * audioMaxCanvas.height);
-				if (index === 0) audioMaxCtx.moveTo(x, y);
-				else audioMaxCtx.lineTo(x, y);
-			});
-			audioMaxCtx.strokeStyle = 'blue';
-			audioMaxCtx.stroke();
-		}
+		function drawMaxValuesHistory() {
+			maxValuesCtx.fillStyle = '#121212';
+			maxValuesCtx.fillRect(0, 0, maxValuesCanvas.width, maxValuesCanvas.height);
+			if (audioMaxHistory.length < 2 || seismicMaxHistory.length < 2) return;
 
-		function drawSeismicMaxHistory() {
-			seismicMaxCtx.fillStyle = '#121212';
-			seismicMaxCtx.fillRect(0, 0, seismicMaxCanvas.width, seismicMaxCanvas.height);
-			if (seismicMaxHistory.length < 2) return;
-			const minTime = seismicMaxHistory[0].timestamp;
-			const maxTime = seismicMaxHistory[seismicMaxHistory.length - 1].timestamp;
+			const minTime = Math.min(audioMaxHistory[0].timestamp, seismicMaxHistory[0].timestamp);
+			const maxTime = Math.max(audioMaxHistory[audioMaxHistory.length - 1].timestamp,
+				seismicMaxHistory[seismicMaxHistory.length - 1].timestamp);
 			const timeRange = maxTime - minTime;
-			const maxValue = 20; // Max seismic magnitude (adjust as needed)
-			seismicMaxCtx.beginPath();
-			seismicMaxHistory.forEach((item, index) => {
-				const x = (item.timestamp - minTime) / timeRange * seismicMaxCanvas.width;
-				const y = seismicMaxCanvas.height - (item.value / maxValue * seismicMaxCanvas.height);
-				if (index === 0) seismicMaxCtx.moveTo(x, y);
-				else seismicMaxCtx.lineTo(x, y);
+
+			// Draw grid lines
+			maxValuesCtx.strokeStyle = '#444';
+			for (let i = 1; i < 5; i++) {
+				const y = maxValuesCanvas.height * (i / 5);
+				maxValuesCtx.beginPath();
+				maxValuesCtx.moveTo(0, y);
+				maxValuesCtx.lineTo(maxValuesCanvas.width, y);
+				maxValuesCtx.stroke();
+			}
+
+			// Draw audio max history (0 to 1 range)
+			maxValuesCtx.beginPath();
+			audioMaxHistory.forEach((item, index) => {
+				const x = (item.timestamp - minTime) / timeRange * maxValuesCanvas.width;
+				const y = maxValuesCanvas.height - (item.value * maxValuesCanvas.height);
+				if (index === 0) maxValuesCtx.moveTo(x, y);
+				else maxValuesCtx.lineTo(x, y);
 			});
-			seismicMaxCtx.strokeStyle = 'red';
-			seismicMaxCtx.stroke();
+			maxValuesCtx.strokeStyle = 'cyan';
+			maxValuesCtx.lineWidth = 2;
+			maxValuesCtx.stroke();
+
+			// Draw seismic max history (0 to 20 range, scaled)
+			maxValuesCtx.beginPath();
+			seismicMaxHistory.forEach((item, index) => {
+				const x = (item.timestamp - minTime) / timeRange * maxValuesCanvas.width;
+				const y = maxValuesCanvas.height - (item.value / 20 * maxValuesCanvas.height);
+				if (index === 0) maxValuesCtx.moveTo(x, y);
+				else maxValuesCtx.lineTo(x, y);
+			});
+			maxValuesCtx.strokeStyle = 'magenta';
+			maxValuesCtx.lineWidth = 2;
+			maxValuesCtx.stroke();
+
+			// Add legend
+			maxValuesCtx.fillStyle = 'cyan';
+			maxValuesCtx.fillRect(10, 10, 20, 10);
+			maxValuesCtx.fillStyle = 'magenta';
+			maxValuesCtx.fillRect(10, 25, 20, 10);
+			maxValuesCtx.fillStyle = '#f5f5f5';
+			maxValuesCtx.font = '12px Arial';
+			maxValuesCtx.fillText('Audio Max', 35, 20);
+			maxValuesCtx.fillText('Seismic Max', 35, 35);
 		}
 
 		function loadSettings() {
@@ -245,7 +284,7 @@
 					link.href = dataURL;
 					link.download = `${key}.mp3`;
 					link.textContent = `Audioclip ${key}`;
-					link.className = "d-block mb-1";
+					link.className = "d-block mb-1 text-info";
 					audioClipsDiv.appendChild(link);
 				}
 			}
@@ -436,7 +475,7 @@
 			link.href = url;
 			link.download = `${key}.mp3`;
 			link.textContent = `Audioclip ${key}`;
-			link.className = "d-block mb-1";
+			link.className = "d-block mb-1 text-info";
 			audioClipsDiv.appendChild(link);
 			const reader = new FileReader();
 			reader.onloadend = () => {
@@ -526,8 +565,7 @@
 
 		window.addEventListener('resize', () => {
 			canvas.width = canvas.parentElement.clientWidth;
-			audioMaxCanvas.width = canvas.parentElement.clientWidth;
-			seismicMaxCanvas.width = canvas.parentElement.clientWidth;
+			maxValuesCanvas.width = maxValuesCanvas.parentElement.clientWidth;
 		});
 
 		loadSettings();
