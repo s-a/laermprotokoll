@@ -122,6 +122,7 @@
 		let recordingEvent = false, eventCaptureStartTime = 0, eventPreBuffer = [], eventPostBuffer = [], lastEventTime = 0;
 		let rafId = null, lastAudioLogTime = 0;
 		let audioMaxHistory = [], seismicMaxHistory = [], latestAudioMax = 0, latestSeismicMax = 0;
+		let wakeLock = null;
 
 		const canvas = document.getElementById('visualizer'), canvasCtx = canvas.getContext('2d');
 		const maxValuesCanvas = document.getElementById('maxValuesCanvas'), maxValuesCtx = maxValuesCanvas.getContext('2d');
@@ -129,6 +130,21 @@
 
 		canvas.width = canvas.parentElement.clientWidth;
 		maxValuesCanvas.width = maxValuesCanvas.parentElement.clientWidth;
+
+		async function keepScreenAwake() {
+			try {
+				wakeLock = await navigator.wakeLock.request('screen');
+				console.log('Screen Wake Lock aktiviert');
+
+				wakeLock.addEventListener('release', () => {
+					console.log('Screen Wake Lock wurde freigegeben');
+				});
+
+				return wakeLock;
+			} catch (err) {
+				console.error(`Wake Lock Fehler: ${err.message}`);
+			}
+		}
 
 		setInterval(() => {
 			if (isRecording) {
@@ -377,6 +393,9 @@
 					}
 					window.addEventListener('devicemotion', handleMotion, false);
 
+					// Aktiviere Wake Lock beim Start
+					await keepScreenAwake();
+
 					isRecording = true;
 					document.getElementById('startStopBtn').textContent = "Stop";
 					visualize();
@@ -395,6 +414,13 @@
 				window.removeEventListener('devicemotion', handleMotion);
 				if (rafId) cancelAnimationFrame(rafId);
 				rafId = null;
+
+				// Deaktiviere Wake Lock beim Stop
+				if (wakeLock) {
+					await wakeLock.release();
+					wakeLock = null;
+					console.log('Screen Wake Lock manuell freigegeben');
+				}
 			}
 		}
 
