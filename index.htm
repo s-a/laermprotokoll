@@ -1,12 +1,13 @@
 <!DOCTYPE html>
-<html lang="de">
+<html lang="en">
 
 <head>
 	<meta charset="utf-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
 	<title>Seismic & Audio Recorder</title>
-	<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+	<!-- Bootstrap CSS -->
 	<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+	<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 	<script src="https://cdn.jsdelivr.net/npm/lamejs@1.2.0/lame.min.js"></script>
 	<style>
 		body {
@@ -17,12 +18,23 @@
 		canvas {
 			border: 1px solid #444;
 			width: 100%;
-			height: 100px;
+			height: 150px;
 		}
 
-		.settings-card {
-			font-size: 0.9rem;
-			padding: 0.5rem;
+		#log {
+			max-height: 300px;
+			overflow-y: auto;
+			border: 1px solid #444;
+			padding: 0;
+		}
+
+		#log li {
+			padding: 5px 10px;
+			border-bottom: 1px solid #333;
+		}
+
+		#log li:nth-child(odd) {
+			background-color: #1e1e1e;
 		}
 	</style>
 </head>
@@ -32,25 +44,9 @@
 		<h1 class="mb-3 text-center">Seismic & Audio Recorder</h1>
 		<div class="d-flex gap-2 justify-content-center">
 			<button id="startStopBtn" class="btn btn-primary">Start</button>
-			<button id="downloadLogBtn" class="btn btn-secondary">Log herunterladen</button>
-			<button id="clearLogBtn" class="btn btn-danger">Log löschen</button>
-		</div>
-
-		<div class="card bg-secondary text-light my-3 settings-card">
-			<div class="card-body p-2">
-				<h6 class="card-title">Einstellungen</h6>
-				<label for="audioThreshold" class="form-label">Audio Threshold: <span
-						id="audioThresholdVal"></span></label>
-				<input type="range" class="form-range" id="audioThreshold" min="0.005" max="0.5" step="0.005"
-					value="0.01">
-				<label for="seismicThreshold" class="form-label">Seismic Threshold: <span
-						id="seismicThresholdVal"></span></label>
-				<input type="range" class="form-range" id="seismicThreshold" min="0.5" max="10" step="0.1" value="3">
-				<div class="form-check mt-2">
-					<input class="form-check-input" type="checkbox" id="enableBeep">
-					<label class="form-check-label" for="enableBeep">Warnton aktivieren</label>
-				</div>
-			</div>
+			<button id="settingsBtn" class="btn btn-secondary">Settings</button>
+			<button id="downloadLogBtn" class="btn btn-secondary">Download Log</button>
+			<button id="clearLogBtn" class="btn btn-danger">Clear Log</button>
 		</div>
 
 		<canvas id="visualizer"></canvas>
@@ -60,69 +56,190 @@
 		<div id="audioClips"></div>
 	</div>
 
+	<!-- Settings Modal -->
+	<div id="settingsModal" class="modal fade" tabindex="-1">
+		<div class="modal-dialog">
+			<div class="modal-content bg-dark text-light">
+				<div class="modal-header">
+					<h5 class="modal-title">Settings</h5>
+					<button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+				</div>
+				<div class="modal-body">
+					<label for="audioThreshold" class="form-label">Audio Threshold: <span
+							id="audioThresholdVal"></span></label>
+					<input type="range" class="form-range" id="audioThreshold" min="0.0001" max="0.1" step="0.0001"
+						value="0.001">
+					<label for="seismicThreshold" class="form-label">Seismic Threshold: <span
+							id="seismicThresholdVal"></span></label>
+					<input type="range" class="form-range" id="seismicThreshold" min="0.5" max="10" step="0.1"
+						value="3">
+					<div class="form-check mt-2">
+						<input class="form-check-input" type="checkbox" id="enableBeep">
+						<label class="form-check-label" for="enableBeep">Enable Beep</label>
+					</div>
+					<div class="form-check mt-2">
+						<input class="form-check-input" type="checkbox" id="enableAudioLog" checked>
+						<label class="form-check-label" for="enableAudioLog">Enable Audio Log</label>
+					</div>
+				</div>
+				<div class="modal-footer">
+					<button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+				</div>
+			</div>
+		</div>
+	</div>
+
 	<script>
-		let audioContext, analyser, microphone, stream, isRecording = false, logEntries = [];
-		let audioThreshold = 0.01, seismicThreshold = 3, enableBeep = false;
-		let canvas = document.getElementById('visualizer'), canvasCtx = canvas.getContext('2d');
+		let audioContext, analyser, microphone, scriptNode, stream, gainNode;
+		let isRecording = false, logEntries = [], preAudioBuffer = [];
+		let audioThreshold = 0.001, seismicThreshold = 3, enableBeep = false, enableAudioLog = true;
+		let recordingEvent = false, eventCaptureStartTime = 0, eventPreBuffer = [], eventPostBuffer = [], lastEventTime = 0;
+		let rafId = null, lastAudioLogTime = 0;
+
+		const canvas = document.getElementById('visualizer'), canvasCtx = canvas.getContext('2d');
 		const logList = document.getElementById('log'), audioClipsDiv = document.getElementById('audioClips');
+		const settingsModal = new bootstrap.Modal(document.getElementById('settingsModal'));
 
 		function loadSettings() {
-			let settings = JSON.parse(localStorage.getItem('settings')) || {};
-			audioThreshold = settings.audioThreshold || 0.01;
+			const settings = JSON.parse(localStorage.getItem('settings')) || {};
+			audioThreshold = settings.audioThreshold || 0.001;
 			seismicThreshold = settings.seismicThreshold || 3;
 			enableBeep = settings.enableBeep || false;
+			enableAudioLog = settings.enableAudioLog !== undefined ? settings.enableAudioLog : true;
 			document.getElementById('audioThreshold').value = audioThreshold;
 			document.getElementById('seismicThreshold').value = seismicThreshold;
 			document.getElementById('enableBeep').checked = enableBeep;
+			document.getElementById('enableAudioLog').checked = enableAudioLog;
 			updateThresholdDisplays();
 		}
 
 		function saveSettings() {
-			localStorage.setItem('settings', JSON.stringify({
+			const settings = {
 				audioThreshold: parseFloat(document.getElementById('audioThreshold').value),
 				seismicThreshold: parseFloat(document.getElementById('seismicThreshold').value),
-				enableBeep: document.getElementById('enableBeep').checked
-			}));
-			loadSettings();
+				enableBeep: document.getElementById('enableBeep').checked,
+				enableAudioLog: document.getElementById('enableAudioLog').checked
+			};
+			localStorage.setItem('settings', JSON.stringify(settings));
+			audioThreshold = settings.audioThreshold;
+			seismicThreshold = settings.seismicThreshold;
+			enableBeep = settings.enableBeep;
+			enableAudioLog = settings.enableAudioLog;
+			updateThresholdDisplays();
 		}
 
 		function updateThresholdDisplays() {
-			document.getElementById('audioThresholdVal').textContent = audioThreshold.toFixed(3);
+			document.getElementById('audioThresholdVal').textContent = audioThreshold.toFixed(4);
 			document.getElementById('seismicThresholdVal').textContent = seismicThreshold.toFixed(1);
 		}
 
-		function logEvent(type) {
-			let entry = `[${new Date().toLocaleTimeString()}] ${type} Event`;
-			logEntries.push(entry);
-			let li = document.createElement('li');
+		function logEvent(type, amplitude = null) {
+			if (type === "Audio" && !enableAudioLog) return;
+			const entry = amplitude ?
+				`[${new Date().toLocaleString()}] ${type} Event (Amplitude: ${amplitude.toFixed(4)})` :
+				`[${new Date().toLocaleString()}] ${type} Event`;
+			logEntries.unshift(entry); // Prepend to log entries
+			if (logEntries.length > 1000) logEntries.pop(); // Limit to 1000 entries
+			const li = document.createElement('li');
 			li.className = "list-group-item bg-dark text-light";
 			li.textContent = entry;
-			logList.appendChild(li);
-			localStorage.setItem('logEntries', JSON.stringify(logEntries));
+			logList.insertBefore(li, logList.firstChild); // Prepend to list
+			try {
+				localStorage.setItem('logEntries', JSON.stringify(logEntries));
+			} catch (e) {
+				console.error('Failed to save log:', e);
+			}
+		}
+
+		function loadLogs() {
+			const storedLogs = JSON.parse(localStorage.getItem('logEntries')) || [];
+			logEntries = storedLogs;
+			logList.innerHTML = "";
+			storedLogs.forEach(entry => {
+				const li = document.createElement('li');
+				li.className = "list-group-item bg-dark text-light";
+				li.textContent = entry;
+				logList.appendChild(li); // Append to maintain order initially
+			});
+		}
+
+		function loadAudioClips() {
+			audioClipsDiv.innerHTML = "";
+			for (let i = 0; i < localStorage.length; i++) {
+				const key = localStorage.key(i);
+				if (key?.startsWith("audio_")) {
+					const dataURL = localStorage.getItem(key);
+					const link = document.createElement('a');
+					link.href = dataURL;
+					link.download = `${key}.mp3`;
+					link.textContent = `Audioclip ${key}`;
+					link.className = "d-block mb-1";
+					audioClipsDiv.appendChild(link);
+				}
+			}
 		}
 
 		function beep() {
-			if (!enableBeep) return;
-			let osc = audioContext.createOscillator();
+			if (!enableBeep || !audioContext) return;
+			const osc = audioContext.createOscillator();
+			const gain = audioContext.createGain();
 			osc.frequency.value = 440;
-			osc.connect(audioContext.destination);
+			gain.gain.value = 0.5;
+			osc.connect(gain);
+			gain.connect(audioContext.destination);
 			osc.start();
 			osc.stop(audioContext.currentTime + 0.2);
+			osc.onended = () => { gain.disconnect(); osc.disconnect(); };
 		}
 
 		function visualize() {
 			if (!isRecording) return;
-			requestAnimationFrame(visualize);
-			let freqData = new Uint8Array(analyser.frequencyBinCount);
+			rafId = requestAnimationFrame(visualize);
+			if (!analyser) return;
+			const freqData = new Uint8Array(analyser.frequencyBinCount);
 			analyser.getByteFrequencyData(freqData);
 			canvasCtx.fillStyle = '#121212';
 			canvasCtx.fillRect(0, 0, canvas.width, canvas.height);
-			let x = 0;
+
+			const scaleWidth = 60;
+			canvasCtx.fillStyle = '#1e1e1e';
+			canvasCtx.fillRect(0, 0, scaleWidth, canvas.height);
+			canvasCtx.font = '10px Arial';
+			canvasCtx.fillStyle = '#f5f5f5';
+			canvasCtx.textAlign = 'right';
+			const dbLevels = [0, -10, -20, -30, -40, -50, -60];
+			dbLevels.forEach(db => {
+				const amplitude = Math.pow(10, db / 20);
+				const y = canvas.height * (1 - (amplitude / 1));
+				canvasCtx.fillText(`${db} dB`, scaleWidth - 5, y + 3);
+				canvasCtx.strokeStyle = '#444';
+				canvasCtx.beginPath();
+				canvasCtx.moveTo(scaleWidth - 5, y);
+				canvasCtx.lineTo(scaleWidth, y);
+				canvasCtx.stroke();
+			});
+
+			const plotWidth = canvas.width - scaleWidth;
+			const barWidth = plotWidth / freqData.length;
+			let x = scaleWidth;
 			for (let i = 0; i < freqData.length; i++) {
-				let barHeight = freqData[i] / 1.5;
-				canvasCtx.fillStyle = '#f5f5f5';
-				canvasCtx.fillRect(x, canvas.height - barHeight, 2, barHeight);
-				x += 3;
+				const barHeight = (freqData[i] / 255) * canvas.height;
+				canvasCtx.fillStyle = '#4caf50';
+				canvasCtx.fillRect(x, canvas.height - barHeight, barWidth, barHeight);
+				x += barWidth + 1;
+			}
+
+			const thresholdY = canvas.height * (1 - (audioThreshold / 0.1));
+			if (thresholdY >= 0 && thresholdY <= canvas.height) {
+				canvasCtx.strokeStyle = '#ff5722';
+				canvasCtx.lineWidth = 2;
+				canvasCtx.beginPath();
+				canvasCtx.moveTo(scaleWidth, thresholdY);
+				canvasCtx.lineTo(canvas.width, thresholdY);
+				canvasCtx.stroke();
+				canvasCtx.fillStyle = '#ff5722';
+				const thresholdDb = 20 * Math.log10(audioThreshold / 0.0001); // Reference to min value
+				canvasCtx.fillText(`Threshold: ${thresholdDb.toFixed(1)} dB`, scaleWidth + 5, thresholdY - 5);
 			}
 		}
 
@@ -136,44 +253,211 @@
 					analyser = audioContext.createAnalyser();
 					analyser.fftSize = 2048;
 					microphone.connect(analyser);
+					scriptNode = audioContext.createScriptProcessor(2048, 1, 1);
+					scriptNode.onaudioprocess = onAudioProcess;
+					microphone.connect(scriptNode);
+					gainNode = audioContext.createGain();
+					gainNode.gain.value = 0;
+					scriptNode.connect(gainNode);
+					gainNode.connect(audioContext.destination);
+
+					if (window.DeviceMotionEvent && typeof DeviceMotionEvent.requestPermission === 'function') {
+						await DeviceMotionEvent.requestPermission();
+					}
+					window.addEventListener('devicemotion', handleMotion, false);
+
 					isRecording = true;
 					document.getElementById('startStopBtn').textContent = "Stop";
 					visualize();
 				} catch (err) {
-					alert('Fehler: ' + err.message);
+					console.error('Start error:', err);
+					alert('Error accessing microphone or sensors: ' + err.message);
 				}
 			} else {
 				isRecording = false;
 				document.getElementById('startStopBtn').textContent = "Start";
 				if (stream) stream.getTracks().forEach(track => track.stop());
+				if (scriptNode) scriptNode.disconnect();
+				if (microphone) microphone.disconnect();
+				if (gainNode) gainNode.disconnect();
+				if (audioContext) audioContext.close();
+				window.removeEventListener('devicemotion', handleMotion);
+				if (rafId) cancelAnimationFrame(rafId);
+				rafId = null;
 			}
 		}
 
+		function onAudioProcess(event) {
+			if (!isRecording) return;
+			const now = Date.now();
+			const inputData = event.inputBuffer.getChannelData(0);
+			const bufferCopy = new Float32Array(inputData);
+			preAudioBuffer.push({ timestamp: now, data: bufferCopy });
+			while (preAudioBuffer.length && preAudioBuffer[0].timestamp < now - 15000) {
+				preAudioBuffer.shift();
+			}
+			let sum = 0;
+			for (let i = 0; i < bufferCopy.length; i++) {
+				sum += bufferCopy[i] * bufferCopy[i]; // Square of the sample
+			}
+			const rms = Math.sqrt(sum / bufferCopy.length); // RMS amplitude
+
+			console.log('Audio RMS Amplitude:', rms);
+
+			if (rms > audioThreshold && (now - lastAudioLogTime > 1000)) {
+				logEvent("Audio", rms);
+				lastAudioLogTime = now;
+			}
+
+			if (rms > audioThreshold && !recordingEvent && (now - lastEventTime > 3000)) {
+				triggerEvent("Audio");
+			}
+
+			if (recordingEvent) {
+				if (now < eventCaptureStartTime + 5000) {
+					eventPostBuffer.push(bufferCopy);
+				} else {
+					setTimeout(finalizeEventCapture, 0);
+				}
+			}
+		}
+
+		function handleMotion(event) {
+			const now = Date.now();
+			let ax = 0, ay = 0, az = 0;
+			if (event.acceleration && event.acceleration.x !== null) {
+				ax = event.acceleration.x || 0;
+				ay = event.acceleration.y || 0;
+				az = event.acceleration.z || 0;
+			} else if (event.accelerationIncludingGravity) {
+				ax = event.accelerationIncludingGravity.x || 0;
+				ay = event.accelerationIncludingGravity.y || 0;
+				az = (event.accelerationIncludingGravity.z || 0) - 9.81;
+			}
+			const magnitude = Math.sqrt(ax * ax + ay * ay + az * az);
+			if (magnitude > seismicThreshold && !recordingEvent && (now - lastEventTime > 3000)) {
+				triggerEvent("Seismic");
+			}
+		}
+
+		function triggerEvent(type) {
+			recordingEvent = true;
+			eventCaptureStartTime = Date.now();
+			const triggerTime = eventCaptureStartTime;
+			eventPreBuffer = preAudioBuffer
+				.filter(chunk => chunk.timestamp >= (triggerTime - 5000))
+				.map(chunk => chunk.data);
+			eventPostBuffer = [];
+			beep();
+			logEvent(type);
+		}
+
+		function finalizeEventCapture() {
+			recordingEvent = false;
+			lastEventTime = Date.now();
+			const combined = flattenBuffers(eventPreBuffer.concat(eventPostBuffer));
+			const mp3Blob = createMP3Blob(combined, audioContext.sampleRate);
+			const url = URL.createObjectURL(mp3Blob);
+			const key = `audio_${Date.now()}`;
+			const link = document.createElement('a');
+			link.href = url;
+			link.download = `${key}.mp3`;
+			link.textContent = `Audioclip ${key}`;
+			link.className = "d-block mb-1";
+			audioClipsDiv.appendChild(link);
+			const reader = new FileReader();
+			reader.onloadend = () => {
+				try {
+					localStorage.setItem(key, reader.result);
+					loadAudioClips();
+				} catch (e) {
+					console.error('Storage error:', e);
+				}
+			};
+			reader.readAsDataURL(mp3Blob);
+			eventPreBuffer = [];
+			eventPostBuffer = [];
+		}
+
+		function flattenBuffers(bufferArray) {
+			const length = bufferArray.reduce((sum, buf) => sum + buf.length, 0);
+			const result = new Float32Array(length);
+			let offset = 0;
+			bufferArray.forEach(buf => {
+				result.set(buf, offset);
+				offset += buf.length;
+			});
+			return result;
+		}
+
+		function float32ToInt16(buffer) {
+			const l = buffer.length;
+			const result = new Int16Array(l);
+			for (let i = 0; i < l; i++) {
+				const s = Math.max(-1, Math.min(1, buffer[i]));
+				result[i] = s < 0 ? s * 32768 : s * 32767;
+			}
+			return result;
+		}
+
+		function createMP3Blob(samples, sampleRate) {
+			const int16Samples = float32ToInt16(samples);
+			const mp3encoder = new lamejs.Mp3Encoder(1, sampleRate, 64);
+			const blockSize = 1152;
+			const mp3Data = [];
+			for (let i = 0; i < int16Samples.length; i += blockSize) {
+				const sampleChunk = int16Samples.subarray(i, i + blockSize);
+				const chunkCopy = new Int16Array(blockSize);
+				chunkCopy.set(sampleChunk);
+				const mp3buf = mp3encoder.encodeBuffer(chunkCopy);
+				if (mp3buf.length > 0) {
+					mp3Data.push(new Uint8Array(mp3buf));
+				}
+			}
+			const mp3buf = mp3encoder.flush();
+			if (mp3buf.length > 0) {
+				mp3Data.push(new Uint8Array(mp3buf));
+			}
+			return new Blob(mp3Data, { type: 'audio/mp3' });
+		}
+
 		function downloadLog() {
-			let blob = new Blob([logEntries.join('\n')], { type: 'text/plain' });
-			let a = document.createElement('a');
+			const blob = new Blob([logEntries.join('\n')], { type: 'text/plain' });
+			const a = document.createElement('a');
 			a.href = URL.createObjectURL(blob);
 			a.download = 'log.txt';
 			a.click();
+			URL.revokeObjectURL(a.href);
 		}
 
 		function clearLog() {
 			logEntries = [];
 			logList.innerHTML = "";
 			localStorage.removeItem('logEntries');
+			const keysToRemove = [];
+			for (let i = 0; i < localStorage.length; i++) {
+				const key = localStorage.key(i);
+				if (key?.startsWith("audio_")) keysToRemove.push(key);
+			}
+			keysToRemove.forEach(key => localStorage.removeItem(key));
+			loadAudioClips();
 		}
 
 		document.getElementById('startStopBtn').addEventListener('click', startStopRecording);
+		document.getElementById('settingsBtn').addEventListener('click', () => settingsModal.show());
 		document.getElementById('downloadLogBtn').addEventListener('click', downloadLog);
 		document.getElementById('clearLogBtn').addEventListener('click', clearLog);
 		document.getElementById('audioThreshold').addEventListener('input', saveSettings);
 		document.getElementById('seismicThreshold').addEventListener('input', saveSettings);
 		document.getElementById('enableBeep').addEventListener('change', saveSettings);
+		document.getElementById('enableAudioLog').addEventListener('change', saveSettings);
 
 		window.addEventListener('resize', () => { canvas.width = canvas.parentElement.clientWidth; });
 		canvas.width = canvas.parentElement.clientWidth;
 
 		loadSettings();
+		loadLogs();
+		loadAudioClips();
 	</script>
 </body>
 
